@@ -3,62 +3,158 @@ const cors = require("cors");
 const { MongoClient } = require("mongodb");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 
 require("dotenv").config();
 
 const app = express();
+
+// Render provides PORT automatically.
+// Local computer will use 5000.
 const PORT = process.env.PORT || 5000;
+
+// =====================================================
+// MIDDLEWARE
+// =====================================================
 
 app.use(cors());
 app.use(express.json());
 
+// =====================================================
+// MONGODB
+// =====================================================
+
 const client = new MongoClient(process.env.MONGODB_URI);
 
 // =====================================================
-// PIZZA HUB EMAIL SENDER
-// =====================================================
-// This is intentionally fixed here so the old
-// specialyout10@gmail.com value cannot be used.
+// PIZZA HUB EMAIL
 // =====================================================
 
-const BREVO_SENDER_NAME = "PizzaHub";
-const BREVO_SENDER_EMAIL = "kolhetejas47@gmail.com";
+const BREVO_SENDER_NAME =
+  process.env.BREVO_SENDER_NAME || "PizzaHub";
+
+const BREVO_SENDER_EMAIL =
+  process.env.BREVO_SENDER_EMAIL || "kolhetejas47@gmail.com";
+
+// =====================================================
+// BREVO HTTPS EMAIL FUNCTION
+// =====================================================
+// IMPORTANT:
+// This uses Brevo HTTPS API instead of SMTP.
+// Render Free blocks SMTP ports, but HTTPS works.
+// =====================================================
+
+async function sendBrevoEmail({
+  to,
+  toName = "PizzaHub Customer",
+  subject,
+  htmlContent,
+}) {
+  if (!process.env.BREVO_API_KEY) {
+    throw new Error(
+      "BREVO_API_KEY is not configured on the server."
+    );
+  }
+
+  const response = await fetch(
+    "https://api.brevo.com/v3/smtp/email",
+    {
+      method: "POST",
+
+      headers: {
+        accept: "application/json",
+        "api-key": process.env.BREVO_API_KEY,
+        "content-type": "application/json",
+      },
+
+      body: JSON.stringify({
+        sender: {
+          name: BREVO_SENDER_NAME,
+          email: BREVO_SENDER_EMAIL,
+        },
+
+        to: [
+          {
+            email: to,
+            name: toName,
+          },
+        ],
+
+        subject,
+
+        htmlContent,
+      }),
+    }
+  );
+
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Brevo API error ${response.status}: ${responseText}`
+    );
+  }
+
+  let result = {};
+
+  try {
+    result = responseText
+      ? JSON.parse(responseText)
+      : {};
+  } catch {
+    result = {
+      raw: responseText,
+    };
+  }
+
+  return result;
+}
+
+// =====================================================
+// START SERVER
+// =====================================================
 
 async function startServer() {
   try {
-    // =========================
+    // =================================================
     // CONNECT MONGODB
-    // =========================
+    // =================================================
 
     await client.connect();
 
-    console.log("✅ MongoDB connected successfully!");
+    console.log(
+      "✅ MongoDB connected successfully!"
+    );
 
     const db = client.db("pizza_delivery");
 
-    const pizzasCollection = db.collection("pizzas");
-    const usersCollection = db.collection("users");
-    const ordersCollection = db.collection("orders");
+    const pizzasCollection =
+      db.collection("pizzas");
 
-    // =========================
-    // RAZORPAY CONFIGURATION
-    // =========================
+    const usersCollection =
+      db.collection("users");
+
+    const ordersCollection =
+      db.collection("orders");
+
+    // =================================================
+    // RAZORPAY
+    // =================================================
 
     const razorpay = new Razorpay({
       key_id: process.env.RAZORPAY_KEY_ID,
       key_secret: process.env.RAZORPAY_KEY_SECRET,
     });
 
-    // =========================
+    // =================================================
     // AUTH MIDDLEWARE
-    // =========================
+    // =================================================
 
     const requireAuth = (req, res, next) => {
       try {
-        const header = req.headers.authorization || "";
+        const header =
+          req.headers.authorization || "";
 
         const token = header.startsWith("Bearer ")
           ? header.slice(7)
@@ -66,7 +162,8 @@ async function startServer() {
 
         if (!token) {
           return res.status(401).json({
-            message: "Please sign in before checkout.",
+            message:
+              "Please sign in before checkout.",
           });
         }
 
@@ -84,59 +181,48 @@ async function startServer() {
       }
     };
 
-    // =========================
-    // BREVO EMAIL CONFIGURATION
-    // =========================
-
-    const transporter = nodemailer.createTransport({
-      host: process.env.BREVO_SMTP_HOST,
-      port: Number(process.env.BREVO_SMTP_PORT) || 587,
-      secure: false,
-      auth: {
-        user: process.env.BREVO_SMTP_LOGIN,
-        pass: process.env.BREVO_SMTP_KEY,
-      },
-    });
-
-    // Check SMTP connection
-    try {
-      await transporter.verify();
-
-      console.log("✅ Brevo SMTP connection successful.");
-      console.log(
-        `📧 PizzaHub sender: ${BREVO_SENDER_EMAIL}`
-      );
-    } catch (emailConnectionError) {
-      console.error(
-        "⚠️ Brevo SMTP connection failed:",
-        emailConnectionError.message
-      );
-    }
-
-    // =========================
+    // =================================================
     // HOME
-    // =========================
+    // =================================================
 
     app.get("/", (req, res) => {
       res.json({
-        message: "🍕 Pizza Delivery API is running!",
+        message:
+          "🍕 PizzaHub Backend API is running!",
         database: "MongoDB connected",
+        email: "Brevo HTTPS API",
+        status: "online",
       });
     });
 
-    // =========================
+    // =================================================
+    // HEALTH CHECK
+    // =================================================
+
+    app.get("/api/health", (req, res) => {
+      res.json({
+        status: "ok",
+        message: "PizzaHub backend is healthy",
+      });
+    });
+
+    // =================================================
     // GET PIZZAS
-    // =========================
+    // =================================================
 
     app.get("/api/pizzas", async (req, res) => {
       try {
-        const pizzas = await pizzasCollection
-          .find()
-          .toArray();
+        const pizzas =
+          await pizzasCollection
+            .find()
+            .toArray();
 
         res.json(pizzas);
       } catch (error) {
-        console.error("Pizza fetch error:", error);
+        console.error(
+          "Pizza fetch error:",
+          error
+        );
 
         res.status(500).json({
           message: "Error fetching pizzas",
@@ -145,219 +231,271 @@ async function startServer() {
       }
     });
 
-    // =========================
+    // =====================================================
     // REGISTER USER
-    // =========================
+    // =====================================================
 
-    app.post("/api/auth/register", async (req, res) => {
-      try {
-        const {
-          name,
-          email,
-          password,
-          confirmPassword,
-        } = req.body;
+    app.post(
+      "/api/auth/register",
+      async (req, res) => {
+        try {
+          const {
+            name,
+            email,
+            password,
+            confirmPassword,
+          } = req.body;
 
-        if (
-          !name ||
-          !email ||
-          !password ||
-          !confirmPassword
-        ) {
-          return res.status(400).json({
-            message:
-              "Name, email, password and confirm password are required.",
-          });
-        }
+          // ---------------------------------------------
+          // VALIDATION
+          // ---------------------------------------------
 
-        if (password !== confirmPassword) {
-          return res.status(400).json({
-            message: "Passwords do not match.",
-          });
-        }
+          if (
+            !name ||
+            !email ||
+            !password ||
+            !confirmPassword
+          ) {
+            return res.status(400).json({
+              message:
+                "Name, email, password and confirm password are required.",
+            });
+          }
 
-        if (password.length < 6) {
-          return res.status(400).json({
-            message:
-              "Password must be at least 6 characters.",
-          });
-        }
+          if (password !== confirmPassword) {
+            return res.status(400).json({
+              message:
+                "Passwords do not match.",
+            });
+          }
 
-        const normalizedEmail = email
-          .trim()
-          .toLowerCase();
+          if (password.length < 6) {
+            return res.status(400).json({
+              message:
+                "Password must be at least 6 characters.",
+            });
+          }
 
-        const normalizedName = name.trim();
+          const normalizedEmail =
+            email.trim().toLowerCase();
 
-        if (!normalizedName) {
-          return res.status(400).json({
-            message: "Name cannot be empty.",
-          });
-        }
+          const normalizedName =
+            name.trim();
 
-        // Check existing user
-        const existingUser =
-          await usersCollection.findOne({
+          if (!normalizedName) {
+            return res.status(400).json({
+              message:
+                "Name cannot be empty.",
+            });
+          }
+
+          // ---------------------------------------------
+          // CHECK EXISTING USER
+          // ---------------------------------------------
+
+          const existingUser =
+            await usersCollection.findOne({
+              email: normalizedEmail,
+            });
+
+          if (existingUser) {
+            return res.status(409).json({
+              message:
+                "An account with this email already exists.",
+            });
+          }
+
+          // ---------------------------------------------
+          // HASH PASSWORD
+          // ---------------------------------------------
+
+          const hashedPassword =
+            await bcrypt.hash(password, 12);
+
+          // ---------------------------------------------
+          // GENERATE OTP
+          // ---------------------------------------------
+
+          const otp = crypto
+            .randomInt(100000, 1000000)
+            .toString();
+
+          const hashedOtp =
+            await bcrypt.hash(otp, 10);
+
+          const otpExpires =
+            new Date(
+              Date.now() +
+                10 * 60 * 1000
+            );
+
+          // ---------------------------------------------
+          // CREATE USER
+          // ---------------------------------------------
+
+          const user = {
+            name: normalizedName,
             email: normalizedEmail,
+            password: hashedPassword,
+
+            isVerified: false,
+
+            otp: hashedOtp,
+            otpExpires,
+
+            otpAttempts: 0,
+
+            lastOtpSentAt:
+              new Date(),
+
+            createdAt:
+              new Date(),
+          };
+
+          await usersCollection.insertOne(
+            user
+          );
+
+          // ---------------------------------------------
+          // OTP EMAIL
+          // ---------------------------------------------
+
+          console.log(
+            `📧 Sending OTP to ${normalizedEmail}`
+          );
+
+          await sendBrevoEmail({
+            to: normalizedEmail,
+            toName: normalizedName,
+
+            subject:
+              "🍕 Your PizzaHub Verification OTP",
+
+            htmlContent: `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>PizzaHub Verification</title>
+</head>
+
+<body style="
+  margin:0;
+  padding:0;
+  background:#fff7f0;
+  font-family:Arial,sans-serif;
+">
+
+<div style="
+  max-width:600px;
+  margin:30px auto;
+  padding:20px;
+">
+
+<div style="
+  background:#ffffff;
+  padding:35px;
+  border-radius:18px;
+  text-align:center;
+  box-shadow:0 5px 20px rgba(0,0,0,0.08);
+">
+
+<h1 style="
+  color:#ff5a1f;
+  margin-bottom:10px;
+">
+🍕 PizzaHub
+</h1>
+
+<h2>
+Verify Your Email
+</h2>
+
+<p>
+Hello ${normalizedName},
+</p>
+
+<p>
+Thank you for creating your PizzaHub account.
+Please use the OTP below to verify your email.
+</p>
+
+<div style="
+  margin:30px 0;
+  padding:22px;
+  background:#fff0e8;
+  border-radius:12px;
+">
+
+<div style="
+  font-size:36px;
+  font-weight:bold;
+  letter-spacing:8px;
+  color:#ff5a1f;
+">
+${otp}
+</div>
+
+</div>
+
+<p>
+This OTP will expire in
+<strong>10 minutes</strong>.
+</p>
+
+<p style="color:#777;">
+If you did not create this account,
+you can safely ignore this email.
+</p>
+
+<p>
+— PizzaHub Team 🍕
+</p>
+
+</div>
+
+</div>
+
+</body>
+</html>
+`,
           });
 
-        if (existingUser) {
-          return res.status(409).json({
+          console.log(
+            `✅ OTP sent to ${normalizedEmail}`
+          );
+
+          return res.status(201).json({
             message:
-              "An account with this email already exists.",
+              "Registration successful. A verification OTP has been sent to your email.",
+          });
+        } catch (error) {
+          console.error(
+            "Registration error:",
+            error
+          );
+
+          return res.status(500).json({
+            message:
+              "Unable to register user.",
+            error: error.message,
           });
         }
-
-        // Hash password
-        const hashedPassword =
-          await bcrypt.hash(password, 12);
-
-        // Generate OTP
-        const otp = crypto
-          .randomInt(100000, 1000000)
-          .toString();
-
-        // Hash OTP
-        const hashedOtp =
-          await bcrypt.hash(otp, 10);
-
-        // OTP expires after 10 minutes
-        const otpExpires = new Date(
-          Date.now() + 10 * 60 * 1000
-        );
-
-        const user = {
-          name: normalizedName,
-          email: normalizedEmail,
-          password: hashedPassword,
-
-          isVerified: false,
-
-          otp: hashedOtp,
-          otpExpires: otpExpires,
-
-          otpAttempts: 0,
-          lastOtpSentAt: new Date(),
-
-          createdAt: new Date(),
-        };
-
-        await usersCollection.insertOne(user);
-
-        // =========================
-        // SEND OTP EMAIL
-        // =========================
-
-        console.log(
-          `📧 Sending OTP from ${BREVO_SENDER_EMAIL} to ${normalizedEmail}`
-        );
-
-        await transporter.sendMail({
-          from: `"${BREVO_SENDER_NAME}" <${BREVO_SENDER_EMAIL}>`,
-
-          to: normalizedEmail,
-
-          subject:
-            "🍕 Your PizzaHub Verification OTP",
-
-          html: `
-            <div style="
-              font-family: Arial, sans-serif;
-              max-width: 600px;
-              margin: auto;
-              padding: 30px;
-              background: #fff7f0;
-            ">
-
-              <div style="
-                background: white;
-                padding: 30px;
-                border-radius: 16px;
-                text-align: center;
-              ">
-
-                <h1 style="color: #ff5a1f;">
-                  🍕 PizzaHub
-                </h1>
-
-                <h2>Verify Your Email</h2>
-
-                <p>
-                  Hello ${normalizedName},
-                </p>
-
-                <p>
-                  Thank you for creating your PizzaHub account.
-                  Use the OTP below to verify your email address.
-                </p>
-
-                <div style="
-                  margin: 30px 0;
-                  padding: 20px;
-                  background: #fff0e8;
-                  border-radius: 12px;
-                ">
-
-                  <div style="
-                    font-size: 36px;
-                    font-weight: bold;
-                    letter-spacing: 8px;
-                    color: #ff5a1f;
-                  ">
-                    ${otp}
-                  </div>
-
-                </div>
-
-                <p>
-                  This OTP will expire in
-                  <strong>10 minutes</strong>.
-                </p>
-
-                <p style="color: #777;">
-                  If you did not create a PizzaHub account,
-                  you can safely ignore this email.
-                </p>
-
-                <p>
-                  — PizzaHub Team 🍕
-                </p>
-
-              </div>
-            </div>
-          `,
-        });
-
-        console.log(
-          `📧 OTP sent successfully to ${normalizedEmail}`
-        );
-
-        res.status(201).json({
-          message:
-            "Registration successful. A verification OTP has been sent to your email.",
-        });
-      } catch (error) {
-        console.error(
-          "Registration error:",
-          error
-        );
-
-        res.status(500).json({
-          message: "Unable to register user.",
-          error: error.message,
-        });
       }
-    });
+    );
 
-    // =========================
+    // =====================================================
     // VERIFY OTP
-    // =========================
+    // =====================================================
 
     app.post(
       "/api/auth/verify-otp",
       async (req, res) => {
         try {
-          const { email, otp } = req.body;
+          const {
+            email,
+            otp,
+          } = req.body;
 
           if (!email || !otp) {
             return res.status(400).json({
@@ -366,9 +504,8 @@ async function startServer() {
             });
           }
 
-          const normalizedEmail = email
-            .trim()
-            .toLowerCase();
+          const normalizedEmail =
+            email.trim().toLowerCase();
 
           const user =
             await usersCollection.findOne({
@@ -389,7 +526,10 @@ async function startServer() {
             });
           }
 
-          // OTP expiry
+          // ---------------------------------------------
+          // OTP EXPIRY
+          // ---------------------------------------------
+
           if (
             !user.otpExpires ||
             user.otpExpires < new Date()
@@ -400,15 +540,23 @@ async function startServer() {
             });
           }
 
-          // OTP attempts
-          if ((user.otpAttempts || 0) >= 5) {
+          // ---------------------------------------------
+          // OTP ATTEMPTS
+          // ---------------------------------------------
+
+          if (
+            (user.otpAttempts || 0) >= 5
+          ) {
             return res.status(429).json({
               message:
                 "Too many incorrect OTP attempts. Please request a new OTP.",
             });
           }
 
-          // Compare OTP
+          // ---------------------------------------------
+          // CHECK OTP
+          // ---------------------------------------------
+
           const otpMatch =
             await bcrypt.compare(
               otp.toString(),
@@ -428,11 +576,15 @@ async function startServer() {
             );
 
             return res.status(400).json({
-              message: "Incorrect OTP.",
+              message:
+                "Incorrect OTP.",
             });
           }
 
-          // Verify user
+          // ---------------------------------------------
+          // VERIFY USER
+          // ---------------------------------------------
+
           await usersCollection.updateOne(
             {
               _id: user._id,
@@ -451,7 +603,11 @@ async function startServer() {
             }
           );
 
-          res.json({
+          console.log(
+            `✅ Email verified: ${normalizedEmail}`
+          );
+
+          return res.json({
             message:
               "Email verified successfully. You can now log in.",
           });
@@ -461,7 +617,7 @@ async function startServer() {
             error
           );
 
-          res.status(500).json({
+          return res.status(500).json({
             message:
               "Unable to verify OTP.",
             error: error.message,
@@ -470,25 +626,27 @@ async function startServer() {
       }
     );
 
-    // =========================
+    // =====================================================
     // RESEND OTP
-    // =========================
+    // =====================================================
 
     app.post(
       "/api/auth/resend-otp",
       async (req, res) => {
         try {
-          const { email } = req.body;
+          const {
+            email,
+          } = req.body;
 
           if (!email) {
             return res.status(400).json({
-              message: "Email is required.",
+              message:
+                "Email is required.",
             });
           }
 
-          const normalizedEmail = email
-            .trim()
-            .toLowerCase();
+          const normalizedEmail =
+            email.trim().toLowerCase();
 
           const user =
             await usersCollection.findOne({
@@ -509,7 +667,10 @@ async function startServer() {
             });
           }
 
-          // Prevent OTP spam
+          // ---------------------------------------------
+          // OTP RATE LIMIT
+          // ---------------------------------------------
+
           if (
             user.lastOtpSentAt &&
             Date.now() -
@@ -524,17 +685,25 @@ async function startServer() {
             });
           }
 
-          // Generate OTP
+          // ---------------------------------------------
+          // NEW OTP
+          // ---------------------------------------------
+
           const otp = crypto
             .randomInt(100000, 1000000)
             .toString();
 
           const hashedOtp =
-            await bcrypt.hash(otp, 10);
+            await bcrypt.hash(
+              otp,
+              10
+            );
 
-          const otpExpires = new Date(
-            Date.now() + 10 * 60 * 1000
-          );
+          const otpExpires =
+            new Date(
+              Date.now() +
+                10 * 60 * 1000
+            );
 
           await usersCollection.updateOne(
             {
@@ -545,88 +714,104 @@ async function startServer() {
                 otp: hashedOtp,
                 otpExpires,
                 otpAttempts: 0,
-                lastOtpSentAt: new Date(),
+                lastOtpSentAt:
+                  new Date(),
               },
             }
           );
 
-          // =========================
+          // ---------------------------------------------
           // SEND NEW OTP
-          // =========================
+          // ---------------------------------------------
 
           console.log(
-            `📧 Sending new OTP from ${BREVO_SENDER_EMAIL} to ${normalizedEmail}`
+            `📧 Sending new OTP to ${normalizedEmail}`
           );
 
-          await transporter.sendMail({
-            from: `"${BREVO_SENDER_NAME}" <${BREVO_SENDER_EMAIL}>`,
-
+          await sendBrevoEmail({
             to: normalizedEmail,
+
+            toName:
+              user.name ||
+              "PizzaHub Customer",
 
             subject:
               "🍕 Your New PizzaHub OTP",
 
-            html: `
-              <div style="
-                font-family: Arial, sans-serif;
-                max-width: 600px;
-                margin: auto;
-                padding: 30px;
-                background: #fff7f0;
-              ">
+            htmlContent: `
+<!DOCTYPE html>
+<html>
+<body style="
+  margin:0;
+  padding:0;
+  background:#fff7f0;
+  font-family:Arial,sans-serif;
+">
 
-                <div style="
-                  background: white;
-                  padding: 30px;
-                  border-radius: 16px;
-                  text-align: center;
-                ">
+<div style="
+  max-width:600px;
+  margin:30px auto;
+  padding:20px;
+">
 
-                  <h1 style="color:#ff5a1f;">
-                    🍕 PizzaHub
-                  </h1>
+<div style="
+  background:#ffffff;
+  padding:35px;
+  border-radius:18px;
+  text-align:center;
+">
 
-                  <h2>
-                    Your New Verification OTP
-                  </h2>
+<h1 style="
+  color:#ff5a1f;
+">
+🍕 PizzaHub
+</h1>
 
-                  <div style="
-                    margin: 30px 0;
-                    padding: 20px;
-                    background: #fff0e8;
-                    border-radius: 12px;
-                  ">
+<h2>
+Your New Verification OTP
+</h2>
 
-                    <div style="
-                      font-size: 36px;
-                      font-weight: bold;
-                      letter-spacing: 8px;
-                      color: #ff5a1f;
-                    ">
-                      ${otp}
-                    </div>
+<div style="
+  margin:30px 0;
+  padding:22px;
+  background:#fff0e8;
+  border-radius:12px;
+">
 
-                  </div>
+<div style="
+  font-size:36px;
+  font-weight:bold;
+  letter-spacing:8px;
+  color:#ff5a1f;
+">
+${otp}
+</div>
 
-                  <p>
-                    This OTP will expire in
-                    <strong>10 minutes</strong>.
-                  </p>
+</div>
 
-                  <p>
-                    — PizzaHub Team 🍕
-                  </p>
+<p>
+This OTP will expire in
+<strong>10 minutes</strong>.
+</p>
 
-                </div>
-              </div>
-            `,
+<p>
+— PizzaHub Team 🍕
+</p>
+
+</div>
+
+</div>
+
+</body>
+</html>
+`,
           });
 
           console.log(
-            `📧 New OTP sent successfully to ${normalizedEmail}`
+            `✅ New OTP sent to ${normalizedEmail}`
           );
 
-          res.json({
+          return res.json({
             message:
               "A new OTP has been sent to your email.",
           });
@@ -636,7 +821,7 @@ async function startServer() {
             error
           );
 
-          res.status(500).json({
+          return res.status(500).json({
             message:
               "Unable to resend OTP.",
             error: error.message,
@@ -645,9 +830,9 @@ async function startServer() {
       }
     );
 
-    // =========================
+    // =====================================================
     // LOGIN
-    // =========================
+    // =====================================================
 
     app.post(
       "/api/auth/login",
@@ -665,9 +850,8 @@ async function startServer() {
             });
           }
 
-          const normalizedEmail = email
-            .trim()
-            .toLowerCase();
+          const normalizedEmail =
+            email.trim().toLowerCase();
 
           const user =
             await usersCollection.findOne({
@@ -694,6 +878,7 @@ async function startServer() {
             });
           }
 
+          // ONLY VERIFIED USERS CAN LOGIN
           if (!user.isVerified) {
             return res.status(403).json({
               message:
@@ -701,35 +886,49 @@ async function startServer() {
             });
           }
 
-          const token = jwt.sign(
-            {
-              userId:
-                user._id.toString(),
+          // ---------------------------------------------
+          // JWT
+          // ---------------------------------------------
 
-              email:
-                user.email,
+          const token =
+            jwt.sign(
+              {
+                userId:
+                  user._id.toString(),
 
-              name:
-                user.name,
-            },
+                email:
+                  user.email,
 
-            process.env.JWT_SECRET,
+                name:
+                  user.name,
+              },
 
-            {
-              expiresIn: "7d",
-            }
+              process.env.JWT_SECRET,
+
+              {
+                expiresIn: "7d",
+              }
+            );
+
+          console.log(
+            `✅ User logged in: ${user.email}`
           );
 
-          res.json({
+          return res.json({
             message:
               "Login successful.",
 
             token,
 
             user: {
-              id: user._id.toString(),
-              name: user.name,
-              email: user.email,
+              id:
+                user._id.toString(),
+
+              name:
+                user.name,
+
+              email:
+                user.email,
             },
           });
         } catch (error) {
@@ -738,7 +937,7 @@ async function startServer() {
             error
           );
 
-          res.status(500).json({
+          return res.status(500).json({
             message:
               "Unable to login.",
             error: error.message,
@@ -747,15 +946,19 @@ async function startServer() {
       }
     );
 
-    // =========================
+    // =====================================================
     // CREATE RAZORPAY ORDER
-    // =========================
+    // =====================================================
 
     app.post(
       "/api/payments/create-order",
       requireAuth,
       async (req, res) => {
         try {
+          // ---------------------------------------------
+          // CHECK RAZORPAY CONFIG
+          // ---------------------------------------------
+
           if (
             !process.env.RAZORPAY_KEY_ID ||
             !process.env.RAZORPAY_KEY_SECRET
@@ -775,19 +978,20 @@ async function startServer() {
             items.length === 0
           ) {
             return res.status(400).json({
-              message: "Cart is empty.",
+              message:
+                "Cart is empty.",
             });
           }
 
-          // =========================
+          // ---------------------------------------------
           // CLEAN CART
-          // =========================
+          // ---------------------------------------------
           // EVERY PIZZA = ₹2
           // DELIVERY = FREE
-          // =========================
+          // ---------------------------------------------
 
-          const cleanItems = items.map(
-            (item) => ({
+          const cleanItems =
+            items.map((item) => ({
               id: String(
                 item._id ||
                   item.id ||
@@ -799,21 +1003,22 @@ async function startServer() {
                   "Pizza"
               ),
 
-              // Force every pizza price to ₹2
+              // IMPORTANT:
+              // Never trust price from frontend.
               price: 2,
 
-              quantity: Math.max(
-                1,
-                Number(
-                  item.quantity
-                ) || 1
-              ),
-            })
-          );
+              quantity:
+                Math.max(
+                  1,
+                  Number(
+                    item.quantity
+                  ) || 1
+                ),
+            }));
 
-          // =========================
-          // CALCULATE SUBTOTAL
-          // =========================
+          // ---------------------------------------------
+          // SUBTOTAL
+          // ---------------------------------------------
 
           const calculatedSubtotal =
             cleanItems.reduce(
@@ -821,19 +1026,19 @@ async function startServer() {
                 sum +
                 item.price *
                   item.quantity,
+
               0
             );
 
-          // =========================
-          // DELIVERY CHARGE
-          // =========================
-          // DELIVERY IS ALWAYS FREE
+          // ---------------------------------------------
+          // FREE DELIVERY
+          // ---------------------------------------------
 
           const calculatedDeliveryFee = 0;
 
-          // =========================
+          // ---------------------------------------------
           // FINAL TOTAL
-          // =========================
+          // ---------------------------------------------
 
           const calculatedTotal =
             calculatedSubtotal +
@@ -851,9 +1056,9 @@ async function startServer() {
             });
           }
 
-          // =========================
-          // CREATE RAZORPAY ORDER
-          // =========================
+          // ---------------------------------------------
+          // RAZORPAY RECEIPT
+          // ---------------------------------------------
 
           const receipt =
             `PH${Date.now()}`.slice(
@@ -861,31 +1066,35 @@ async function startServer() {
               40
             );
 
+          // ---------------------------------------------
+          // CREATE RAZORPAY ORDER
+          // ---------------------------------------------
+
           const razorpayOrder =
-            await razorpay.orders.create(
-              {
-                amount:
-                  Math.round(
-                    calculatedTotal *
-                      100
-                  ),
+            await razorpay.orders.create({
+              amount:
+                Math.round(
+                  calculatedTotal *
+                    100
+                ),
 
-                currency: "INR",
+              currency:
+                "INR",
 
-                receipt,
+              receipt,
 
-                notes: {
-                  email:
-                    req.user.email,
+              notes: {
+                email:
+                  req.user.email,
 
-                  app: "PizzaHub",
-                },
-              }
-            );
+                app:
+                  "PizzaHub",
+              },
+            });
 
-          // =========================
+          // ---------------------------------------------
           // SAVE LOCAL ORDER
-          // =========================
+          // ---------------------------------------------
 
           const localOrder = {
             userId:
@@ -894,7 +1103,8 @@ async function startServer() {
             email:
               req.user.email,
 
-            items: cleanItems,
+            items:
+              cleanItems,
 
             subtotal:
               calculatedSubtotal,
@@ -905,9 +1115,11 @@ async function startServer() {
             total:
               calculatedTotal,
 
-            currency: "INR",
+            currency:
+              "INR",
 
-            status: "created",
+            status:
+              "created",
 
             paymentStatus:
               "pending",
@@ -924,11 +1136,11 @@ async function startServer() {
               localOrder
             );
 
-          // =========================
-          // SEND RESPONSE
-          // =========================
+          // ---------------------------------------------
+          // RESPONSE
+          // ---------------------------------------------
 
-          res.json({
+          return res.json({
             keyId:
               process.env
                 .RAZORPAY_KEY_ID,
@@ -960,7 +1172,7 @@ async function startServer() {
             error
           );
 
-          res.status(500).json({
+          return res.status(500).json({
             message:
               "Unable to start payment.",
 
@@ -971,10 +1183,9 @@ async function startServer() {
       }
     );
 
-    // =========================
+    // =====================================================
     // VERIFY PAYMENT
-    // + SEND BILL EMAIL
-    // =========================
+    // =====================================================
 
     app.post(
       "/api/payments/verify",
@@ -987,9 +1198,9 @@ async function startServer() {
             razorpay_signature,
           } = req.body;
 
-          // =========================
+          // ---------------------------------------------
           // CHECK PAYMENT DATA
-          // =========================
+          // ---------------------------------------------
 
           if (
             !razorpay_payment_id ||
@@ -1002,20 +1213,18 @@ async function startServer() {
             });
           }
 
-          // =========================
+          // ---------------------------------------------
           // FIND ORDER
-          // =========================
+          // ---------------------------------------------
 
           const order =
-            await ordersCollection.findOne(
-              {
-                razorpayOrderId:
-                  razorpay_order_id,
+            await ordersCollection.findOne({
+              razorpayOrderId:
+                razorpay_order_id,
 
-                email:
-                  req.user.email,
-              }
-            );
+              userId:
+                req.user.userId,
+            });
 
           if (!order) {
             return res.status(404).json({
@@ -1024,9 +1233,32 @@ async function startServer() {
             });
           }
 
-          // =========================
-          // VERIFY RAZORPAY SIGNATURE
-          // =========================
+          // ---------------------------------------------
+          // PREVENT DUPLICATE VERIFICATION
+          // ---------------------------------------------
+
+          if (
+            order.paymentStatus ===
+            "paid"
+          ) {
+            return res.json({
+              message:
+                "Payment was already verified.",
+
+              orderId:
+                order.razorpayOrderId,
+
+              paymentId:
+                order.razorpayPaymentId,
+
+              total:
+                order.total,
+            });
+          }
+
+          // ---------------------------------------------
+          // RAZORPAY SIGNATURE
+          // ---------------------------------------------
 
           const expectedSignature =
             crypto
@@ -1050,18 +1282,20 @@ async function startServer() {
             });
           }
 
-          // =========================
+          // ---------------------------------------------
           // MARK PAYMENT PAID
-          // =========================
+          // ---------------------------------------------
 
           await ordersCollection.updateOne(
             {
-              _id: order._id,
+              _id:
+                order._id,
             },
 
             {
               $set: {
-                status: "paid",
+                status:
+                  "paid",
 
                 paymentStatus:
                   "paid",
@@ -1078,262 +1312,297 @@ async function startServer() {
             }
           );
 
-          // =========================
-          // CREATE BILL ROWS
-          // =========================
+          // =================================================
+          // BILL TABLE
+          // =================================================
 
           const billRows =
             order.items
               .map(
                 (item) => `
-                  <tr>
-                    <td style="
-                      padding:10px;
-                      border-bottom:1px solid #eee;
-                    ">
-                      ${item.name}
-                    </td>
+<tr>
 
-                    <td style="
-                      padding:10px;
-                      text-align:center;
-                      border-bottom:1px solid #eee;
-                    ">
-                      ${item.quantity}
-                    </td>
+<td style="
+padding:10px;
+border-bottom:1px solid #eee;
+">
+${item.name}
+</td>
 
-                    <td style="
-                      padding:10px;
-                      text-align:right;
-                      border-bottom:1px solid #eee;
-                    ">
-                      ₹${(
-                        item.price *
-                        item.quantity
-                      ).toFixed(2)}
-                    </td>
-                  </tr>
-                `
+<td style="
+padding:10px;
+text-align:center;
+border-bottom:1px solid #eee;
+">
+${item.quantity}
+</td>
+
+<td style="
+padding:10px;
+text-align:right;
+border-bottom:1px solid #eee;
+">
+₹${(
+                  item.price *
+                  item.quantity
+                ).toFixed(2)}
+</td>
+
+</tr>
+`
               )
               .join("");
 
-          // =========================
+          // =================================================
           // SEND BILL EMAIL
-          // =========================
+          // =================================================
 
           try {
             console.log(
-              `📧 Sending BILL from ${BREVO_SENDER_EMAIL} to ${order.email}`
+              `📧 Sending bill to ${order.email}`
             );
 
             const mailInfo =
-              await transporter.sendMail({
-                from: `"${BREVO_SENDER_NAME}" <${BREVO_SENDER_EMAIL}>`,
+              await sendBrevoEmail({
+                to:
+                  order.email,
 
-                to: order.email,
+                toName:
+                  req.user.name ||
+                  "PizzaHub Customer",
 
                 subject:
                   `🍕 PizzaHub Payment Receipt - ${order.razorpayOrderId}`,
 
-                html: `
-                  <div style="
-                    font-family:Arial,sans-serif;
-                    background:#fff7f0;
-                    padding:30px;
-                  ">
+                htmlContent: `
+<!DOCTYPE html>
+<html>
 
-                    <div style="
-                      max-width:650px;
-                      margin:auto;
-                      background:white;
-                      padding:30px;
-                      border-radius:18px;
-                    ">
+<head>
+<meta charset="UTF-8">
 
-                      <h1 style="
-                        color:#ff5a1f;
-                        margin-top:0;
-                      ">
-                        🍕 PizzaHub
-                      </h1>
+<title>
+PizzaHub Payment Receipt
+</title>
 
-                      <h2>
-                        Payment successful 🎉
-                      </h2>
+</head>
 
-                      <p>
-                        Thank you for your order.
-                        Your payment has been verified successfully.
-                      </p>
+<body style="
+margin:0;
+padding:0;
+background:#fff7f0;
+font-family:Arial,sans-serif;
+">
 
-                      <p>
-                        <strong>
-                          Customer:
-                        </strong>
-                        ${req.user.name || "PizzaHub Customer"}
-                      </p>
+<div style="
+padding:30px;
+">
 
-                      <p>
-                        <strong>
-                          Email:
-                        </strong>
-                        ${order.email}
-                      </p>
+<div style="
+max-width:650px;
+margin:auto;
+background:white;
+padding:30px;
+border-radius:18px;
+box-shadow:0 5px 20px rgba(0,0,0,0.08);
+">
 
-                      <p>
-                        <strong>
-                          Order ID:
-                        </strong>
-                        ${order.razorpayOrderId}
-                      </p>
+<h1 style="
+color:#ff5a1f;
+margin-top:0;
+">
+🍕 PizzaHub
+</h1>
 
-                      <p>
-                        <strong>
-                          Payment ID:
-                        </strong>
-                        ${razorpay_payment_id}
-                      </p>
+<h2>
+Payment successful 🎉
+</h2>
 
-                      <p>
-                        <strong>
-                          Date:
-                        </strong>
-                        ${new Date().toLocaleString(
-                          "en-IN"
-                        )}
-                      </p>
+<p>
+Thank you for your order.
+Your payment has been verified successfully.
+</p>
 
-                      <table style="
-                        width:100%;
-                        border-collapse:collapse;
-                        margin-top:20px;
-                      ">
+<p>
+<strong>
+Customer:
+</strong>
+${req.user.name || "PizzaHub Customer"}
+</p>
 
-                        <thead>
-                          <tr>
+<p>
+<strong>
+Email:
+</strong>
+${order.email}
+</p>
 
-                            <th style="
-                              text-align:left;
-                              padding:10px;
-                              border-bottom:2px solid #ff5a1f;
-                            ">
-                              Item
-                            </th>
+<p>
+<strong>
+Order ID:
+</strong>
+${order.razorpayOrderId}
+</p>
 
-                            <th style="
-                              text-align:center;
-                              padding:10px;
-                              border-bottom:2px solid #ff5a1f;
-                            ">
-                              Qty
-                            </th>
+<p>
+<strong>
+Payment ID:
+</strong>
+${razorpay_payment_id}
+</p>
 
-                            <th style="
-                              text-align:right;
-                              padding:10px;
-                              border-bottom:2px solid #ff5a1f;
-                            ">
-                              Amount
-                            </th>
+<p>
+<strong>
+Date:
+</strong>
+${new Date().toLocaleString("en-IN")}
+</p>
 
-                          </tr>
-                        </thead>
+<table style="
+width:100%;
+border-collapse:collapse;
+margin-top:20px;
+">
 
-                        <tbody>
-                          ${billRows}
-                        </tbody>
+<thead>
 
-                      </table>
+<tr>
 
-                      <div style="
-                        margin-top:20px;
-                        text-align:right;
-                      ">
+<th style="
+text-align:left;
+padding:10px;
+border-bottom:2px solid #ff5a1f;
+">
+Item
+</th>
 
-                        <p>
-                          Subtotal:
-                          <strong>
-                            ₹${order.subtotal.toFixed(2)}
-                          </strong>
-                        </p>
+<th style="
+text-align:center;
+padding:10px;
+border-bottom:2px solid #ff5a1f;
+">
+Qty
+</th>
 
-                        <p>
-                          Delivery:
-                          <strong>
-                            FREE
-                          </strong>
-                        </p>
+<th style="
+text-align:right;
+padding:10px;
+border-bottom:2px solid #ff5a1f;
+">
+Amount
+</th>
 
-                        <h2 style="
-                          color:#ff5a1f;
-                        ">
-                          Total Paid:
-                          ₹${order.total.toFixed(2)}
-                        </h2>
+</tr>
 
-                      </div>
+</thead>
 
-                      <div style="
-                        margin-top:30px;
-                        padding:15px;
-                        background:#fff7f0;
-                        border-radius:10px;
-                        text-align:center;
-                      ">
-                        <p style="
-                          margin:0;
-                          color:#555;
-                        ">
-                          Payment Status:
-                          <strong style="color:green;">
-                            PAID
-                          </strong>
-                        </p>
-                      </div>
+<tbody>
 
-                      <p style="
-                        color:#777;
-                        margin-bottom:0;
-                        margin-top:25px;
-                      ">
-                        Thank you for choosing
-                        PizzaHub. 🍕
-                      </p>
+${billRows}
 
-                    </div>
-                  </div>
-                `,
+</tbody>
+
+</table>
+
+<div style="
+margin-top:20px;
+text-align:right;
+">
+
+<p>
+Subtotal:
+<strong>
+₹${order.subtotal.toFixed(2)}
+</strong>
+</p>
+
+<p>
+Delivery:
+<strong>
+FREE
+</strong>
+</p>
+
+<h2 style="
+color:#ff5a1f;
+">
+Total Paid:
+₹${order.total.toFixed(2)}
+</h2>
+
+</div>
+
+<div style="
+margin-top:30px;
+padding:15px;
+background:#fff7f0;
+border-radius:10px;
+text-align:center;
+">
+
+<p style="
+margin:0;
+color:#555;
+">
+
+Payment Status:
+
+<strong style="
+color:green;
+">
+PAID
+</strong>
+
+</p>
+
+</div>
+
+<p style="
+color:#777;
+margin-top:25px;
+">
+
+Thank you for choosing
+PizzaHub. 🍕
+
+</p>
+
+</div>
+
+</div>
+
+</body>
+
+</html>
+`,
               });
 
             console.log(
-              "📧 Bill email sent successfully."
+              "✅ Bill email sent successfully."
             );
 
             console.log(
-              "📨 SMTP envelope:",
-              mailInfo.envelope
+              "📨 Brevo response:",
+              mailInfo
             );
-
-            console.log(
-              "📨 Message ID:",
-              mailInfo.messageId
-            );
-
           } catch (emailError) {
+            // Payment is already successful.
+            // Email failure should NOT make payment fail.
+
             console.error(
               "⚠️ Payment succeeded but bill email failed:"
             );
 
             console.error(
-              emailError
+              emailError.message
             );
           }
 
-          // =========================
-          // SUCCESS RESPONSE
-          // =========================
+          // =================================================
+          // SUCCESS
+          // =================================================
 
-          res.json({
+          return res.json({
             message:
               "Payment verified successfully. Bill processed.",
 
@@ -1352,7 +1621,7 @@ async function startServer() {
             error
           );
 
-          res.status(500).json({
+          return res.status(500).json({
             message:
               "Payment was received, but confirmation could not be completed automatically. Please check your email and dashboard.",
 
@@ -1363,26 +1632,80 @@ async function startServer() {
       }
     );
 
-    // =========================
-    // 404 HANDLER
-    // =========================
+    // =====================================================
+    // ORDER HISTORY
+    // =====================================================
 
-    app.use((req, res) => {
-      res.status(404).json({
-        message:
-          "API route not found.",
-      });
-    });
+    app.get(
+      "/api/orders",
+      requireAuth,
+      async (req, res) => {
+        try {
+          const orders =
+            await ordersCollection
+              .find({
+                userId:
+                  req.user.userId,
+              })
+              .sort({
+                createdAt: -1,
+              })
+              .toArray();
 
-    // =========================
-    // START SERVER
-    // =========================
+          return res.json(orders);
+        } catch (error) {
+          console.error(
+            "Order history error:",
+            error
+          );
 
-    app.listen(PORT, () => {
-      console.log(
-        `🚀 Backend server running on http://localhost:${PORT}`
-      );
-    });
+          return res.status(500).json({
+            message:
+              "Unable to load order history.",
+            error:
+              error.message,
+          });
+        }
+      }
+    );
+
+    // =====================================================
+    // 404
+    // =====================================================
+
+    app.use(
+      (req, res) => {
+        res.status(404).json({
+          message:
+            "API route not found.",
+        });
+      }
+    );
+
+    // =====================================================
+    // START EXPRESS SERVER
+    // =====================================================
+    // IMPORTANT FOR RENDER:
+    // 0.0.0.0 allows Render to access the server.
+    // =====================================================
+
+    app.listen(
+      PORT,
+      "0.0.0.0",
+      () => {
+        console.log(
+          `🚀 PizzaHub backend listening on port ${PORT}`
+        );
+
+        console.log(
+          `📧 Email sender: ${BREVO_SENDER_EMAIL}`
+        );
+
+        console.log(
+          "🌐 Brevo email method: HTTPS API"
+        );
+      }
+    );
 
   } catch (error) {
     console.error(
@@ -1394,5 +1717,9 @@ async function startServer() {
     );
   }
 }
+
+// =====================================================
+// RUN
+// =====================================================
 
 startServer();
