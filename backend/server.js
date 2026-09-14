@@ -234,255 +234,170 @@ async function startServer() {
     // =====================================================
     // REGISTER USER
     // =====================================================
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const { name, email, password, confirmPassword } = req.body;
 
-    app.post(
-      "/api/auth/register",
-      async (req, res) => {
-        try {
-          const {
-            name,
-            email,
-            password,
-            confirmPassword,
-          } = req.body;
+    // -----------------------------
+    // VALIDATION
+    // -----------------------------
+    if (!name || !email || !password || !confirmPassword) {
+      return res.status(400).json({
+        message: "All fields are required.",
+      });
+    }
 
-          // ---------------------------------------------
-          // VALIDATION
-          // ---------------------------------------------
+    if (password !== confirmPassword) {
+      return res.status(400).json({
+        message: "Passwords do not match.",
+      });
+    }
 
-          if (
-            !name ||
-            !email ||
-            !password ||
-            !confirmPassword
-          ) {
-            return res.status(400).json({
-              message:
-                "Name, email, password and confirm password are required.",
-            });
-          }
+    if (password.length < 6) {
+      return res.status(400).json({
+        message: "Password must be at least 6 characters.",
+      });
+    }
 
-          if (password !== confirmPassword) {
-            return res.status(400).json({
-              message:
-                "Passwords do not match.",
-            });
-          }
+    const normalizedName = name.trim();
+    const normalizedEmail = email.trim().toLowerCase();
 
-          if (password.length < 6) {
-            return res.status(400).json({
-              message:
-                "Password must be at least 6 characters.",
-            });
-          }
+    // -----------------------------
+    // CHECK EXISTING USER
+    // -----------------------------
+    const existingUser = await usersCollection.findOne({
+      email: normalizedEmail,
+    });
 
-          const normalizedEmail =
-            email.trim().toLowerCase();
+    // If account already exists AND is verified,
+    // do not allow another registration.
+    if (existingUser && existingUser.isVerified === true) {
+      return res.status(409).json({
+        message: "An account with this email already exists.",
+      });
+    }
 
-          const normalizedName =
-            name.trim();
+    // -----------------------------
+    // CREATE NEW OTP
+    // -----------------------------
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
-          if (!normalizedName) {
-            return res.status(400).json({
-              message:
-                "Name cannot be empty.",
-            });
-          }
+    const hashedOtp = await bcrypt.hash(otp, 10);
 
-          // ---------------------------------------------
-          // CHECK EXISTING USER
-          // ---------------------------------------------
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
-          const existingUser =
-            await usersCollection.findOne({
-              email: normalizedEmail,
-            });
+    // -----------------------------
+    // HASH PASSWORD
+    // -----------------------------
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-          if (existingUser) {
-            return res.status(409).json({
-              message:
-                "An account with this email already exists.",
-            });
-          }
+    // -----------------------------
+    // USER DATA
+    // -----------------------------
+    const userData = {
+      name: normalizedName,
+      email: normalizedEmail,
+      password: hashedPassword,
+      isVerified: false,
+      otp: hashedOtp,
+      otpExpires,
+      otpAttempts: 0,
+      lastOtpSentAt: new Date(),
+    };
 
-          // ---------------------------------------------
-          // HASH PASSWORD
-          // ---------------------------------------------
+    // -----------------------------
+    // INSERT OR UPDATE USER
+    // -----------------------------
+    if (existingUser) {
+      // Existing account is NOT verified.
+      // Restart registration with new password + new OTP.
 
-          const hashedPassword =
-            await bcrypt.hash(password, 12);
-
-          // ---------------------------------------------
-          // GENERATE OTP
-          // ---------------------------------------------
-
-          const otp = crypto
-            .randomInt(100000, 1000000)
-            .toString();
-
-          const hashedOtp =
-            await bcrypt.hash(otp, 10);
-
-          const otpExpires =
-            new Date(
-              Date.now() +
-                10 * 60 * 1000
-            );
-
-          // ---------------------------------------------
-          // CREATE USER
-          // ---------------------------------------------
-
-          const user = {
-            name: normalizedName,
-            email: normalizedEmail,
-            password: hashedPassword,
-
-            isVerified: false,
-
-            otp: hashedOtp,
-            otpExpires,
-
-            otpAttempts: 0,
-
-            lastOtpSentAt:
-              new Date(),
-
-            createdAt:
-              new Date(),
-          };
-
-          await usersCollection.insertOne(
-            user
-          );
-
-          // ---------------------------------------------
-          // OTP EMAIL
-          // ---------------------------------------------
-
-          console.log(
-            `📧 Sending OTP to ${normalizedEmail}`
-          );
-
-          await sendBrevoEmail({
-            to: normalizedEmail,
-            toName: normalizedName,
-
-            subject:
-              "🍕 Your PizzaHub Verification OTP",
-
-            htmlContent: `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>PizzaHub Verification</title>
-</head>
-
-<body style="
-  margin:0;
-  padding:0;
-  background:#fff7f0;
-  font-family:Arial,sans-serif;
-">
-
-<div style="
-  max-width:600px;
-  margin:30px auto;
-  padding:20px;
-">
-
-<div style="
-  background:#ffffff;
-  padding:35px;
-  border-radius:18px;
-  text-align:center;
-  box-shadow:0 5px 20px rgba(0,0,0,0.08);
-">
-
-<h1 style="
-  color:#ff5a1f;
-  margin-bottom:10px;
-">
-🍕 PizzaHub
-</h1>
-
-<h2>
-Verify Your Email
-</h2>
-
-<p>
-Hello ${normalizedName},
-</p>
-
-<p>
-Thank you for creating your PizzaHub account.
-Please use the OTP below to verify your email.
-</p>
-
-<div style="
-  margin:30px 0;
-  padding:22px;
-  background:#fff0e8;
-  border-radius:12px;
-">
-
-<div style="
-  font-size:36px;
-  font-weight:bold;
-  letter-spacing:8px;
-  color:#ff5a1f;
-">
-${otp}
-</div>
-
-</div>
-
-<p>
-This OTP will expire in
-<strong>10 minutes</strong>.
-</p>
-
-<p style="color:#777;">
-If you did not create this account,
-you can safely ignore this email.
-</p>
-
-<p>
-— PizzaHub Team 🍕
-</p>
-
-</div>
-
-</div>
-
-</body>
-</html>
-`,
-          });
-
-          console.log(
-            `✅ OTP sent to ${normalizedEmail}`
-          );
-
-          return res.status(201).json({
-            message:
-              "Registration successful. A verification OTP has been sent to your email.",
-          });
-        } catch (error) {
-          console.error(
-            "Registration error:",
-            error
-          );
-
-          return res.status(500).json({
-            message:
-              "Unable to register user.",
-            error: error.message,
-          });
+      await usersCollection.updateOne(
+        { _id: existingUser._id },
+        {
+          $set: userData,
         }
-      }
-    );
+      );
+    } else {
+      // Completely new account
+      await usersCollection.insertOne({
+        ...userData,
+        createdAt: new Date(),
+      });
+    }
+
+    // -----------------------------
+    // SEND OTP EMAIL
+    // -----------------------------
+    await sendBrevoEmail({
+      to: normalizedEmail,
+      toName: normalizedName,
+      subject: "PizzaHub Email Verification OTP",
+      htmlContent: `
+        <div style="
+          font-family: Arial, sans-serif;
+          max-width: 600px;
+          margin: auto;
+          padding: 30px;
+          background: #f8f8f8;
+        ">
+          <div style="
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+          ">
+            <h1 style="color: #e63946;">
+              🍕 PizzaHub
+            </h1>
+
+            <h2>Verify Your Email</h2>
+
+            <p>
+              Hello <strong>${normalizedName}</strong>,
+            </p>
+
+            <p>
+              Use the OTP below to verify your PizzaHub account:
+            </p>
+
+            <div style="
+              font-size: 32px;
+              font-weight: bold;
+              letter-spacing: 8px;
+              color: #e63946;
+              margin: 25px 0;
+            ">
+              ${otp}
+            </div>
+
+            <p>
+              This OTP is valid for <strong>10 minutes</strong>.
+            </p>
+
+            <p style="color: #777;">
+              If you did not create a PizzaHub account,
+              you can safely ignore this email.
+            </p>
+          </div>
+        </div>
+      `,
+    });
+
+    // -----------------------------
+    // SUCCESS
+    // -----------------------------
+    return res.status(201).json({
+      message: "OTP sent to your email.",
+    });
+  } catch (error) {
+    console.error("❌ Registration error:", error);
+
+    return res.status(500).json({
+      message: "Registration failed. Please try again.",
+    });
+  }
+});
 
     // =====================================================
     // VERIFY OTP
